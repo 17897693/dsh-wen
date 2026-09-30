@@ -1,0 +1,21 @@
+# dsh-wen 组合包（bundle）的配置层。
+#
+# 插件行按「包名」引用 —— 这样 Node 才能从安装该包的 profile 的 node_modules
+# 解析到本包（package.json 的 main = index.js，exports["./skill"] = skill.js）。
+# 若你改为手动挂载（未安装为包），请把下面两行 name 换成 index.js / skill.js
+# 的绝对路径。
+- insert:
+    - id: tool-office
+      name: dsh-wen
+    # 把 office_* 工具注册成可发现的 dsh-wen 技能，使每个会话的 turn-0
+    # catalog 里出现它（body：./SKILL.md）。
+    - id: skill-office
+      name: dsh-wen/skill
+# 启用默认被 @deepseek-ai/dsh-web-app 关闭的 skill 子系统：没有这三行，磁盘上的
+# 技能永远不会被发现，模型也没有调用它们的工具，而且不会有任何报错。
+- id: skill-filesystem
+  disabled: false
+- id: tool-skill
+  disabled: false
+- id: skill-badge
+  disabled: false

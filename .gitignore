@@ -1,0 +1,8 @@
+node_modules/
+test-out/
+*.log
+*.bak-*
+.ocr.md
+.read.md
+
+vendor/

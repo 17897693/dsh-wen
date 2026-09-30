@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-wen",
+    "description": "Read, create, edit and convert Office and PDF documents via office_read / office_create / office_edit / office_convert."
+  }
+}

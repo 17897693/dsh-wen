@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-wen（办公文档）",
+    "description": "Word / Excel / PPT / PDF / ODF / CSV 的读取、创建、编辑与格式转换，由 office_read / office_create / office_edit / office_convert 四个工具提供。"
+  }
+}
