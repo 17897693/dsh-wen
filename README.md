@@ -23,7 +23,7 @@
 
 ```sh
 dsh plugin --profile web add ./dsh-wen                # 本地目录
-# 或从 git：dsh plugin --profile web add github:<you>/dsh-wen
+# 或从 git：dsh plugin --profile web add github:17897693/dsh-wen
 ```
 
 包内的 [`cordis.patch.yml`](cordis.patch.yml) 会随 `dsh.bundle` 声明自动作为一个配置层生效。
