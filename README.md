@@ -1,9 +1,15 @@
 # dsh-wen — DSH 系统级 Office 全能插件
 
+> **English** · A zero-dependency Office all-in-one plugin for DeepSeek Harness (DSH): read, create, edit and convert `.docx` / `.xlsx` / `.pptx` / `.pdf` (text layer) / `.odf` / `.csv` / `.html` with built-in offline OCR (Chinese). Install with `dsh plugin --profile web add github:17897693/dsh-wen`. Note: the full OCR and PDF rendering quality gate are Windows x64–only; on other platforms it degrades to the pure-JS feature set. UI and documentation are primarily in Chinese.
+
 ## 关于这个项目
 
 考公考编闲暇之余写的 DSH 办公文档插件，**自用为主，顺手开源**。
 项目原名 `dsh-office`，后更名为 **`dsh-wen`**。
+
+### 稳定性设计目标
+
+本项目最初的动机是**确保 DSH 在安装任何插件后都不会崩溃**：因此采用**零第三方依赖**（仅使用 Node 内置模块）、只注册全局工具、不触碰 GUI 服务的设计，稳定性为第一优先级。已实测的环境：DSH `0.1.7-alpha.2`（Windows x64）安装与加载通过；其他平台按上文「平台」一节自动降级运行。本仓库不保证在任何未实测环境（含历史版本 DSH）下同样稳定，请以实际验证为准。
 
 ### 维护状态：不承诺维护
 
