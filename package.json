@@ -33,6 +33,7 @@
     "index.js",
     "skill.js",
     "*.js",
+    "pdf-render.ps1",
     "locale/",
     "vendor/",
     "SKILL.md",
