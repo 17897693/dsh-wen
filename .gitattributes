@@ -1,0 +1,8 @@
+# 统一行尾策略，避免 core.autocrlf 把纯 LF 文件改写成 CRLF，
+# 导致 GitHub 上出现「整份文件全部变红」的假 diff。
+#
+# 本仓库的 md / js / json 等文本文件一律以 LF 入库。
+* text=auto eol=lf
+
+# Windows 专用脚本保持 CRLF（PowerShell 5.1 对此更友好）。
+*.ps1 text eol=crlf
