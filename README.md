@@ -1,5 +1,11 @@
 # dsh-wen — DSH 系统级 Office 全能插件
 
+[![dshbase install-tested](https://dshbase.com/badges/dsh-wen.svg)](https://dshbase.com/plugins/dsh-wen/)
+
+> **一句话**：零第三方依赖（仅 Node 内置模块）的 Office 全家桶 —— 让 DSH 多出 4 个全局工具，
+> 读写改转 docx / xlsx / pptx / pdf / odf / csv / html，附**中文 PDF 乱码自愈**与**扫描件离线 OCR**。
+> 设计目标：**装上不让 DSH 崩**。详见 [dshbase 实测页](https://dshbase.com/plugins/dsh-wen/)。
+
 ![dsh-wen 在 DSH 会话中的实际运行：`office_create` 创建 docx、`office_read` 读回](docs/self-test-screenshot.png)
 
 > **English** · A zero-dependency Office all-in-one plugin for DeepSeek Harness (DSH): read, create, edit and convert `.docx` / `.xlsx` / `.pptx` / `.pdf` (text layer) / `.odf` / `.csv` / `.html` with built-in offline OCR (Chinese). Install with `dsh plugin --profile web add github:17897693/dsh-wen`. Note: the full OCR and PDF rendering quality gate are Windows x64–only; on other platforms it degrades to the pure-JS feature set. UI and documentation are primarily in Chinese.
@@ -12,12 +18,6 @@
 ### 稳定性设计目标
 
 本项目最初的动机是**确保 DSH 在安装任何插件后都不会崩溃**：因此采用**零第三方依赖**（仅使用 Node 内置模块）、只注册全局工具、不触碰 GUI 服务的设计，稳定性为第一优先级。已实测的环境：DSH `0.1.7-alpha.2`（Windows x64）安装与加载通过；其他平台按上文「平台」一节自动降级运行。本仓库不保证在任何未实测环境（含历史版本 DSH）下同样稳定，请以实际验证为准。
-
-### 维护状态：不承诺维护
-
-- 不保证跟进 DSH 的版本变更；作者可能随时停止更新或归档本仓库
-- 不承诺回复 issue / PR
-- **欢迎 fork 自行维护、修改、再分发**（见 [LICENSE](LICENSE)）
 
 ### 平台
 
@@ -64,6 +64,8 @@ dsh --profile web --dump-config      # 应能看到 "# == dsh-wen" 层
 ### 免责
 
 本软件按「原样」提供，不附带任何形式的担保。
+
+### 能力与挂载
 
 零第三方依赖（仅 Node 内置模块）的办公文档读写/编辑/转换能力，注册为 DSH 全局工具，
 **所有 profile 的所有新会话自动可用**，无需手动启用或配置路径。
@@ -241,3 +243,9 @@ office_read paths=["<corpus>/真题"]     # 一次调用返回逐文件轻量 st
 
 删除 `${DSH_HOME}/cordis.patch.yml` 中的 **`tool-office` 与 `skill-office` 两行**（或整个文件），
 再删除 `${DSH_HOME}/plugins/dsh-wen/` 目录即可；也可只把这两行 `disabled: true` 临时停用。
+
+## 维护状态：不承诺维护
+
+- 不保证跟进 DSH 的版本变更；作者可能随时停止更新或归档本仓库
+- 不承诺回复 issue / PR
+- **欢迎 fork 自行维护、修改、再分发**（见 [LICENSE](LICENSE)）
