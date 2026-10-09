@@ -2,23 +2,23 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 /**
- * Bundled `dsh-office` skill provider.
+ * Bundled `dsh-wen` skill provider.
  *
  * Exposes the office_* tool plugin (index.js) as a discoverable skill, so every
  * session sees it in the turn-0 catalog instead of only having four anonymous
  * tools to guess about.
  *
- * @module dsh-office/skill
+ * @module dsh-wen/skill
  */
 
-// Registry-UNIQUE provider id. It must NOT be "dsh-office": the desktop build
+// Registry-UNIQUE provider id. It must NOT be "dsh-wen": the desktop build
 // ships @deepseek-ai/dsh-skill-office (the bundled `desktop-office`, mounted by
 // the desktop host), which already registers a skills provider under the name
 // "dsh-office" in the same (global) layer — and SkillsRegistry.registerProvider
 // throws on a duplicate name, so this whole row failed to mount on desktop with
 // "a skill provider named \"dsh-office\" is already registered".
-// The SKILL name below stays "dsh-office", so `skill("dsh-office")` is unchanged.
-const PROVIDER_NAME = "dsh-wen";
+// The SKILL name below stays "dsh-wen", so `skill("dsh-wen")` is unchanged.
+const PROVIDER_NAME = "dsh-wen-tools";
 const SKILL_BODY_URL = new URL("./SKILL.md", import.meta.url);
 const RESOURCE_BASE = {
 	kind: "directory",
@@ -62,7 +62,7 @@ export const name = "skill-office";
 /** Service required by this provider. */
 export const inject = ["skills"];
 
-/** Register the bundled `dsh-office` provider on `ctx.skills`. */
+/** Register the bundled `dsh-wen` provider on `ctx.skills`. */
 export function apply(ctx) {
 	ctx.skills.registerProvider(() => provider);
 }

@@ -25,7 +25,7 @@ import { serializeSlideXmlForEdit, slideRelsForEdit, notesXmlForEdit, notesRelsF
 import { readOdt, readOds, readOdp, writeOdt, writeOds, writeOdp } from './odf.js'
 import { readPdfText, writePdf } from './pdf.js'
 import { parseOle2, readLegacyDoc, readLegacyXls, readLegacyPpt, textToBlocks } from './legacy.js'
-import { cropPngBand, pngInkCoverage } from './png.js'
+import { cropPngBand, pngInkCoverage, readPngInfo } from './png.js'
 // 第十二轮需求 1b/1c：零依赖图片嗅探/解码（docx 插图的尺寸、PDF `/XObject` 的采样数据）。
 import { readImageBytes, sniffImage, imageExt, imageMime } from './image.js'
 // 第十二轮需求 3：xlsx 公式重算（纯 TS 子集求值器；只有显式 `recalc=true` 才启用）。
@@ -3388,9 +3388,116 @@ async function runPool(items, limit, worker) {
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, run))
 }
 
+/**
+ * P0-1（v1.1）：送视觉桥前的**分辨率门**。
+ *
+ * 实测依据（2026-10，鲁迅手稿同页同模型）：
+ *   635×1100 → 准确率 54.4%（能读出真实内容）
+ *   318×550  → 准确率 3.7%，且**整段编造**（原图「五月五日舟抵天津」，
+ *              模型输出「五月二十一日 晴 晨起，整理书案，阅《资治通鉴》数页…」，
+ *              这段文字在图上是根本不存在的）
+ * 低清 → 模型看不清 → 用常识补齐 → 通顺但完全虚假的输出。
+ * 这种输出**从文本上无法分辨真假**，比"识别失败"危险得多。
+ *
+ * 所以：长边低于阈值时**不放行给视觉桥**，改为在**更高倍率重渲染一次**；
+ * 仍不达标则明确报错（而不是把低清图递过去、让用户拿到貌似合理的假文本）。
+ * 阈值可用 DSH_OFFICE_VISION_MIN_SIDE 调整（0 = 关闭该护栏，回到旧行为）。
+ */
+export function visionMinSide(raw = process.env.DSH_OFFICE_VISION_MIN_SIDE) {
+  if (raw === undefined || raw === null || raw === '') return 1024
+  const n = Number(raw)
+  if (!Number.isFinite(n) || n < 0) return 1024
+  return Math.floor(n)          // 0 = 显式关闭
+}
+
+/** 读 PNG 长边（只读文件头，不解码像素）。读不出来返回 null（不阻断流程）。 */
+function pngLongSide(pngPath) {
+  try {
+    const info = readPngInfo(readFileSync(pngPath))
+    return Math.max(info.width, info.height)
+  } catch { return null }
+}
+
+/**
+ * P1-2（v1.1）：**结构化版面预警**（复用本地引擎已检出的框坐标，零额外开销）。
+ *
+ * 实测依据（2026-10，高考作文答题卡）：
+ *   页面 y=800~1700（占页面高度 52%）**连续 10 个 100px 带零检测框**，
+ *   而那片正是正文主体；被检出的 14 个框置信度却高达 80%~99.9%。
+ *   → 引擎不是"认不准"，是**根本没检测到**：作文方格网格被检测模型判为非文本结构整片跳过。
+ *
+ * 判据：把页面按纵向分带，统计"有框的带"占比。过低 ⇒ 疑似结构化版面（方格/表格线/分栏）。
+ * 只**追加提示**，绝不据此跳过识别（避免误伤正常稀疏页面）。
+ * 返回 null 表示无异常（不支持该判据时不猜）。
+ */
+export function layoutGapWarning(boxes, pageH) {
+  try {
+    if (!Array.isArray(boxes) || boxes.length < 3) return null
+    const H = Number(pageH)
+    if (!Number.isFinite(H) || H <= 0) return null
+    const BANDS = 10
+    const hits = new Set()
+    let maxY = 0
+    for (const b of boxes) {
+      const c = b?.box?.[0]
+      const y = Number(Array.isArray(c) ? c[1] : NaN)
+      if (!Number.isFinite(y)) continue
+      if (y > maxY) maxY = y
+      const idx = Math.min(BANDS - 1, Math.max(0, Math.floor((y / H) * BANDS)))
+      hits.add(idx)
+    }
+    if (!hits.size) return null
+    const covered = hits.size / BANDS
+    // 正常正文页：各带都有字，覆盖率应接近 1。实测病灶样本：检出框全挤在上半部，
+    // 下半部整片空白 ⇒ 覆盖率显著偏低。
+    if (covered >= 0.7) return null
+    // 再确认一次"头重脚轻"：最大 y 远小于页高，说明后半页整片没检测到
+    const tailMiss = maxY / H < 0.8
+    if (!tailMiss) return null
+    return `版面异常：检出框只覆盖 ${(covered * 100).toFixed(0)}% 的页面纵带（最高只到页面 ${(maxY / H * 100).toFixed(0)}% 处）。` +
+      `这通常意味着检测模型把**方格 / 表格线 / 分栏**判成了非文本结构而整片跳过 —— ` +
+      `实测作文答题卡的方格曾导致页面中部 52% 高度零检测。此类版面建议改用视觉桥（ocrEngine:"vision"），` +
+      `或先做去网格预处理。`
+  } catch { return null }
+}
+
+/**
+ * 取一张"够视觉桥用"的页面图：原生分辨率不够就按倍率逐步重渲染。
+ * 返回 { png, note }；note 非空时说明发生过升倍率（会进记账，不静默）。
+ * 分辨率门关闭（阈值 0）时原样返回，行为与旧版逐字一致。
+ */
+function visionGradePage(file, pageNo, exec, full, stat) {
+  const minSide = visionMinSide()
+  if (!minSide) return { png: full, note: '' }
+  const side = pngLongSide(full)
+  if (side == null || side >= minSide) return { png: full, note: '' }
+  // 原生不够：按 2 / 3 倍重渲染，取第一个达标的
+  for (const scale of [2, 3]) {
+    try {
+      const hi = renderPdfPage(file, pageNo, exec, '', scale)
+      const hiSide = pngLongSide(hi)
+      if (hiSide != null && hiSide >= minSide) {
+        stat.upscaled = stat.upscaled || new Map()
+        stat.upscaled.set(pageNo, scale)
+        return { png: hi, note: `第 ${pageNo} 页原生 ${side}px < ${minSide}px，已按 ${scale}× 重渲染（${hiSide}px）` }
+      }
+    } catch { /* 换倍率失败就当没换，下面按不达标处理 */ }
+  }
+  // 重渲染也没达标：明确拒绝，绝不把低清图交给视觉桥（那会诱发编造）
+  throw new Error(
+    `第 ${pageNo} 页图像分辨率不足：原生长边 ${side}px < 视觉桥下限 ${minSide}px，` +
+    `按 2×/3× 重渲染后仍不达标。低清图会让视觉模型"看不清就编造"` +
+    `（实测 318×550 产生过整段虚假文本），因此这里拒绝送图。` +
+    `可设 DSH_OFFICE_VISION_MIN_SIDE=0 关闭该护栏，或设 DSH_OFFICE_RENDER_SCALE=2 提高渲染倍率。`
+  )
+}
+
 async function ocrOneBand(file, pageNo, exec, vision, band, stat, budget) {
   const full = renderPdfPage(file, pageNo, exec)
-  const png = bandPng(full, band.index, band.count)
+  // 分辨率门：在切片之前先把"够不够清楚"解决掉
+  const graded = visionGradePage(file, pageNo, exec, full, stat)
+  if (graded.note) { stat.notes = stat.notes || []; stat.notes.push(graded.note) }
+  const png = bandPng(graded.png, band.index, band.count)
   const where = band.count > 1 ? `第 ${pageNo} 页的第 ${band.index + 1}/${band.count} 段（横向分带）` : `第 ${pageNo} 页`
   const args = {
     path: png,
@@ -3515,6 +3622,7 @@ async function ocrPdfPages(file, pageNumbers, exec, tools, mode = 'auto', docTot
     localError: '', total, visionCalls: 0, visionSkipped: [], visionPlanned: 0,
     retried: new Map(),        // page → 最终胜出的倍率（换倍率才救回来的页）
     retryFailed: new Map(),    // page → 全倍率都没过时的原因（含"已试过 scale=…"）
+    layoutWarnings: [],        // P1-2（v1.1）：结构化版面预警（页码 + 一句话）
     cacheDirNote: cacheDirState().note,
     // 旧解析器 / 身份不符的 sidecar：页号或正文可能不是这份源的，已经整份作废
     // （见 PDF_PARSER_VERSION 与缓存身份段）；reason 让提示能说清是"哪一类"作废。
@@ -3533,6 +3641,18 @@ async function ocrPdfPages(file, pageNumbers, exec, tools, mode = 'auto', docTot
     const baseScale = currentRenderScale()
     const baseTag = scaleTag(baseScale)
     const rendered = renderPdfPages(file, missing, exec, baseTag, baseScale)   // 一次文档加载出齐所有页
+    // P0-2（v1.1）：**非 ASCII 路径检测**。
+    // 实测（2026-10）：RapidOCR-json 读不了父路径含中文的图片 —— 同一文件、SHA-256 一致，
+    // 放在 %TEMP%\dsh-office-ocr\... 下返回 code:100（检出 14 框），
+    // 放到某个含中文的父目录（如 D:\<中文目录>\...）下就返回 `{"code":300,"data":"JSON dump failed. Coding error."}`。
+    // 那个 code:300 完全指不出根因，用户会以为是图像损坏或引擎坏了。
+    // 所以这里在真正调引擎**之前**就把原因说清楚（只提示、不阻断 —— 引擎版本可能已修）。
+    const nonAscii = [...rendered.values()].filter(p => /[^\x20-\x7E]/.test(p))
+    if (nonAscii.length && engine) {
+      info.pathWarning = `渲染图路径含非 ASCII 字符（如 ${nonAscii[0]}）：部分 RapidOCR 版本会返回 code:300 ` +
+        `"JSON dump failed"，表现为"识别莫名失败"。若下列批次全部失败，请把 DSH_OFFICE_CACHE_DIR ` +
+        `指向纯英文路径后重试。`
+    }
     const pages = missing.filter(p => rendered.get(p))
     for (const pageNo of missing) {
       if (!rendered.get(pageNo)) done.set(pageNo, { page: pageNo, text: '', cached: false, engine: LOCAL_ENGINE, failed: `第 ${pageNo} 页栅格化失败` })
@@ -3556,6 +3676,16 @@ async function ocrPdfPages(file, pageNumbers, exec, tools, mode = 'auto', docTot
           hard.push({ page: batch[i], reason: verdict.reason || '本地引擎未通过质量门', retryable: verdict.retryable !== false })
           continue
         }
+        // P1-2（v1.1）：结构化版面预警 —— 复用刚检出的框坐标，零额外开销。
+        // 页高从已渲染的 PNG 头里读（不解码像素）。只追加提示，不影响识别结果。
+        try {
+          const pngPath = rendered.get(batch[i])
+          const pngInfo = pngPath ? readPngInfo(readFileSync(pngPath)) : null
+          if (pngInfo) {
+            const warn = layoutGapWarning(r.boxes, pngInfo.height)
+            if (warn) { info.layoutWarnings = info.layoutWarnings || []; info.layoutWarnings.push({ page: batch[i], note: warn }) }
+          }
+        } catch { /* 预警是附加信息，失败不影响主流程 */ }
         const text = verdict.blank ? '' : String(r.text || '').trim()
         done.set(batch[i], { page: batch[i], text, cached: false, engine: LOCAL_ENGINE, blank: verdict.blank, score: r.avg, boxes: r.boxes.length })
         cache.set(batch[i], text)
@@ -3650,6 +3780,9 @@ async function ocrPdfPages(file, pageNumbers, exec, tools, mode = 'auto', docTot
       }
       try {
         const vp = await ocrPageText(file, pageNo, exec, vision, 1, 0, { calls: 0 }, budget)
+        // P0-3（v1.1）：**隐私告知**。图片已离开本机送第三方视觉 API —— 记在 info 上（不是临时 stat），
+        // 由调用方写进本次输出的脚注。只在首次真正上传时记一条，避免多页刷屏。
+        if (process.env.DSH_OFFICE_VISION_NO_NOTICE !== '1') info.visionPrivacyNoted = true
         // 谁让它走视觉的：用户指定 / 没装本地引擎 / 本地没过质量门。三者的话术不同，
         // 不能把用户指定说成"本地没把握"（那会诱导去调 DSH_OFFICE_OCR_MIN_SCORE）。
         const via = mode === 'vision' ? 'user' : engine ? 'review' : 'no-local'
@@ -3857,6 +3990,26 @@ async function readPdf(args, exec, file, model, extra, ocrMode, tools, ocrEngine
     stats.pagesWithText = extra.sections.length - noText(extra.sections).length
     stats.scannedPages = noText(extra.sections).map(s => s.page)
     stats.fallback = 'none'
+    // P1-1（v1.1）：**能力探测**。旧版只有在"真的触发 OCR 且本地失败"时才报"未装配视觉桥"，
+    // 用户事前无法知道，等于烧完一轮才发现没救。这里在读 meta 阶段就把家底交代清楚
+    // （纯探测，不渲染、不 OCR、不消耗任何额度）。
+    try {
+      const hasLocal = (() => { try { return Boolean(findEngine()) } catch { return false } })()
+      const hasVision = Boolean(tools?.get?.('modlens_read_image'))
+      stats.ocrCapabilities = {
+        local: hasLocal,
+        vision: hasVision,
+        // 只有两样都没有、而这文档又确实需要 OCR 时，才是真正"没救"
+        note: (() => {
+          const needOcr = !stats.textLayerUsable || stats.scannedPages.length > 0
+          if (!needOcr) return '文本层可用，无需 OCR'
+          if (hasLocal && hasVision) return '本地引擎 + 视觉桥均可用'
+          if (hasLocal) return '仅本地引擎可用：手写/复杂版面页会失败，且无视觉桥兜底'
+          if (hasVision) return '仅视觉桥可用：耗时长（单页 10 秒~2 分钟），手写稿结果需人工复核'
+          return '没有任何识别引擎：本地 RapidOCR 未找到，视觉桥 modlens_read_image 未装配 —— 该文档无法 OCR'
+        })(),
+      }
+    } catch { /* 探测失败不影响 meta 主体 */ }
     // —— 质量画像：文字层"有没有"（pagesWithText/scannedPages）与"能不能用"（这里）是两件事 ——
     // CID 乱码样本的 textFound=true、scannedPages=[]，旧版 meta 因此看起来完全健康。
     const prof = textLayerProfile(extra.sections)
@@ -4026,6 +4179,14 @@ async function readPdf(args, exec, file, model, extra, ocrMode, tools, ocrEngine
     const vCalls = ocrInfo?.visionCalls || 0
     const calls = vCalls > (tally.get('视觉桥') || 0) ? `（${vCalls} 次视觉调用）` : ''
     notes.push(`已 OCR 第 ${ocrPages.join('、')} 页（${summary}${calls}${ocrInfo?.engineName ? `｜${ocrInfo.engineName}` : ''}）；结果缓存为同名 .ocr.md`)
+    // P0-3（v1.1）：**隐私告知**。只要本次真的把图上传给过第三方视觉 API 就必须说 —— 这不是免责声明，
+    // 是知情：原图离开了本机。放在视觉相关脚注的最前面，因为它是本轮唯一"可能造成外泄"的动作。
+    // 可用 DSH_OFFICE_VISION_NO_NOTICE=1 隐藏（有明确说不需要的自动化场景）。
+    if (ocrInfo?.visionPrivacyNoted) {
+      notes.push(
+        '⚠ 隐私：以上识别使用了**第三方视觉 API**，页面图已上传离开本机。涉密或不宜外传的文档请改用 `ocrEngine:"local"` 禁用回落。'
+      )
+    }
     if (ocrInfo?.escalated?.length) notes.push(`本地引擎对第 ${ocrInfo.escalated.join('、')} 页没把握，已交视觉模型复核`)
     if (ocrInfo?.forcedVision?.length) notes.push(`第 ${ocrInfo.forcedVision.join('、')} 页按 ocrEngine:"${ocrEngine}" 指定走视觉识别（非本地引擎自动升级）`)
     // 预算护栏：跳过的页必须点名，绝不静默少识别（只在设了 DSH_OFFICE_VISION_MAX_CALLS 时才可能出现）
@@ -4036,6 +4197,28 @@ async function readPdf(args, exec, file, model, extra, ocrMode, tools, ocrEngine
       notes.push(`第 ${pageRanges(ocrInfo.visionSkipped)} 页因视觉调用预算上限跳过（计划 ${planned} / 完成 ${finished} / 跳过 ${skipped}）`)
     }
     if (ocrInfo?.localError) notes.push(`本地 OCR 未完成：${ocrInfo.localError}`)
+    // P0-2（v1.1）：非 ASCII 渲染路径的**提前预警**。只在真的走到本地引擎且路径含非 ASCII 时出现，
+    // 正常（%TEMP% 下）路径一个字符都不变 —— 用来把"code:300 莫名失败"的根因摆到台面上。
+    if (ocrInfo?.pathWarning) notes.push(ocrInfo.pathWarning)
+    // P1-2（v1.1）：结构化版面预警。命中时把页码与原因摆出来（每类最多提醒 3 页，避免刷屏）。
+    if (ocrInfo?.layoutWarnings?.length) {
+      const seen = new Set()
+      for (const w of ocrInfo.layoutWarnings) {
+        if (seen.size >= 3) break
+        if (seen.has(w.note)) continue
+        seen.add(w.note)
+        notes.push(`第 ${w.page} 页 ${w.note}`)
+      }
+      if (ocrInfo.layoutWarnings.length > seen.size) {
+        notes.push(`另有 ${ocrInfo.layoutWarnings.length - seen.size} 页存在同类版面预警`)
+      }
+    }
+    // P0-1（v1.1）：分辨率门触发过升倍率就把账记出来（降级救回来的页，用户有权知道）
+    if (ocrInfo?.upscaled?.size) {
+      const pairs = [...ocrInfo.upscaled].sort((a, b) => a[0] - b[0])
+      notes.push(`第 ${pageRanges(pairs.map(([p]) => p))} 页原生分辨率低于视觉桥下限，已升倍率重渲染后送识别（`
+        + `${pairs.map(([p, s]) => `${p}→${s}×`).join('，')}；DSH_OFFICE_VISION_MIN_SIDE 可调，0=关闭）`)
+    }
     // 换倍率重试要记账：这些页是"降级救回来"的，用户有权知道原始分辨率没过质量门
     if (ocrInfo?.retried?.size) {
       const pairs = [...ocrInfo.retried].sort((a, b) => a[0] - b[0])

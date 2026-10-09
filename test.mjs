@@ -475,7 +475,7 @@ calc: 520 + 460 + 300 = 1280
   // （任务 D 起 manifest 必须带 `parser:`；任务一起还必须带**源身份** srcpath/srcsha256，
   //   缺失或不符会被整份作废，见下面的"缓存迁移 / 缓存身份"段）
   writeOcrSidecar(blankPdf, `covered: 1 | parser: ${PDF_PARSER_VERSION}`,
-    '## 第 1 页（OCR）\n缓存识别文本：sample-ocr-text\n')
+    '## 第 1 页（OCR）\n缓存识别文本：高中数学教资笔试零基础速成课\n')
   const cachedRead = await call('office_read', { path: blankPdf, pages: '1' })
   ok('OCR 缓存命中并标注来源', cachedRead.content.includes('缓存识别文本') && cachedRead.content.includes('OCR 缓存'), cachedRead.content.replace(/\n/g, ' ').slice(0, 100))
   ok('OCR 页计入 stats.ocrPages', Array.isArray(cachedRead.stats.ocrPages) && cachedRead.stats.ocrPages.includes(1), JSON.stringify(cachedRead.stats.ocrPages))
@@ -511,8 +511,8 @@ calc: 520 + 460 + 300 = 1280
   const eng = findEngine()
   ok('引擎发现（vendor / DSH_OFFICE_RAPIDOCR_DIR / PATH）', true, eng ? `已装：${eng.dir}` : '未安装 → 仅验证视觉桥降级')
   ok('解析 code:100 结果行（文本 + 置信）', (() => {
-    const p = parseResultLine('{"code":100,"data":[{"box":[[349,175],[556,175],[556,228],[349,228]],"score":0.978,"text":"sample-topic"},{"box":[[216,332],[690,335],[689,446],[215,444]],"score":0.992,"text":"sample-ocr-text"}]}')
-    return p.code === 100 && p.boxes.length === 2 && p.avg > 0.97 && p.text === 'sample-topic\nsample-ocr-text'
+    const p = parseResultLine('{"code":100,"data":[{"box":[[349,175],[556,175],[556,228],[349,228]],"score":0.978,"text":"政治理论"},{"box":[[216,332],[690,335],[689,446],[215,444]],"score":0.992,"text":"理论精讲"}]}')
+    return p.code === 100 && p.boxes.length === 2 && p.avg > 0.97 && p.text === '政治理论\n理论精讲'
   })())
   ok('code:101 判为空页且不回落视觉', (() => {
     const v = gateResult(parseResultLine('{"code":101,"data":"No text found in image."}'))
@@ -1230,7 +1230,7 @@ calc: 520 + 460 + 300 = 1280
   }
 
   // ---------------- 权限加密 PDF（空打开密码）+ 扫描件 ----------------
-  const encPdf = 'samples/sample-C.pdf'
+  const encPdf = process.env.DSH_OFFICE_TEST_ENC_PDF || 'samples/sample-encrypted.pdf'
   if (existsSync(encPdf)) {
     try {
       const em = await call('office_read', { path: encPdf, as: 'meta' })
@@ -1252,12 +1252,15 @@ calc: 520 + 460 + 300 = 1280
   }
 
   // ---------------- real-world files ----------------
+  // 真机样本一律走环境变量（DSH_OFFICE_TEST_REAL_DIR 指向你自己的样本目录），
+  // 仓库里不放任何个人路径。缺失即按套件既有惯例跳过，不算失败。
+  const realDir = process.env.DSH_OFFICE_TEST_REAL_DIR || 'samples'
   const real = [
-    ['samples/sample-shortlist.csv', '.csv'],
-    ['samples/sample-positions.xlsx', '.xlsx'],
-    ['samples/sample-deck.pptx', '.pptx'],
-    ['samples/sample-lecture.pdf', '.pdf'],
-    ['samples/sample-lecture.docx', '.docx'],
+    [join(realDir, 'sample-real.csv'), '.csv'],
+    [join(realDir, 'sample-real.xlsx'), '.xlsx'],
+    [join(realDir, 'sample-real.pptx'), '.pptx'],
+    [join(realDir, 'sample-real.pdf'), '.pdf'],
+    [join(realDir, 'sample-real.docx'), '.docx'],
   ]
   for (const [file, ext] of real) {
     // 环境依赖样本：文件缺失 = 本机没有该文件，不是代码问题 —— 按套件既有惯例记
@@ -1273,7 +1276,7 @@ calc: 520 + 460 + 300 = 1280
   }
 
   // real xlsx metadata + sheet listing
-  const realXlsx = 'samples/sample-roster.xlsx'
+  const realXlsx = process.env.DSH_OFFICE_TEST_REAL_XLSX || join(realDir, 'sample-real-meta.xlsx')
   if (existsSync(realXlsx)) {
     const meta = await call('office_read', { path: realXlsx, as: 'meta' })
     ok('真实 xlsx 工作表枚举', Array.isArray(meta.stats.sheets) && meta.stats.sheets.length >= 1, JSON.stringify(meta.stats.sheets))
@@ -3425,9 +3428,11 @@ calc: 520 + 460 + 300 = 1280
     const c4 = await call('office_create', { path: join(OUT, 'r1-from-html.md'), from: htmlFile })
     ok('R1 create from=html（转换式创建）', existsSync(c4.path))
 
-    // 真实样本（存在才跑）：上一轮 OCR 重建的两份学习笔记 HTML —— 含大量表格/嵌套列表
-    for (const real of ['<work>/deepseek9/sample-A-样本.html',
-      '<work>/deepseek9/sample-topic-2-样本-汇总.html']) {
+    // 真实样本（存在才跑）：OCR 重建的学习笔记 HTML —— 含大量表格/嵌套列表
+    // 样本目录走环境变量，仓库里不放个人路径
+    const realHtmlDir = process.env.DSH_OFFICE_TEST_REAL_DIR || 'samples'
+    for (const real of [join(realHtmlDir, 'sample-notes-a.html'),
+      join(realHtmlDir, 'sample-notes-b.html')]) {
       if (!existsSync(real)) continue
       const rmeta = await call('office_read', { path: real, as: 'meta' })
       ok(`R1 真实样本 meta：${basename(real)}`, rmeta.format === 'html' && rmeta.stats.blocks > 50 && rmeta.stats.textLayerUsable === true, JSON.stringify(rmeta.stats))
